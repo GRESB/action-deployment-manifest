@@ -1,0 +1,79 @@
+name: Continues Integratione
+
+
+
+on:
+  pull_request:
+    branches:
+      - '*'
+
+
+jobs:
+  create-manifest:
+    name: Create a deployment manifest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Create deployment manifest
+        uses: ./
+        with:
+          create: true
+          issue-number: ${{ github.event.pull_request.number }}
+          issue-title: 'Deploy v1.2.3'
+
+
+  read-manifest-runtime-in-manifest:
+    name: Read a deployment manifest and validate runtime
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    needs:
+      - create-manifest
+    steps:
+      - uses: actions/checkout@v3
+      - name: read
+        id: read
+        uses: ./
+        with:
+          read: true
+          issue-number: ${{ github.event.pull_request.number }}
+          runtime: tst
+      - uses: peter-evans/create-or-update-comment@v2
+        if: always()
+        with:
+          issue-number: ${{ github.event.pull_request.number }}
+          body: |
+            ## Reading manifest while providing invalid runtime
+
+            Read release: `${{ steps.read.outputs.release }}`
+            Read runtimes: `${{ steps.read.outputs.runtimes }}`
+
+            Validation result (expected success): ${{ steps.read.outcome }}
+
+
+  read-manifest-not-in-manifest:
+    name: Read a deployment manifest and validate runtime
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    needs:
+      - create-manifest
+    steps:
+      - uses: actions/checkout@v3
+      - name: read
+        uses: ./
+        with:
+          read: true
+          issue-number: ${{ github.event.pull_request.number }}
+          runtime: foo
+      - uses: peter-evans/create-or-update-comment@v2
+        if: always()
+        with:
+          issue-number: ${{ github.event.pull_request.number }}
+          body: |
+            ## Reading manifest while providing invalid runtime
+
+            GitHub Actions currently does not support allowing a step to fail and letting the job succeed.
+            Therefore this step which is expected to fail is also failing the job, and that's unfortunate.
+            Feel free to merge the PR even if this job is marked as failed.
+            
+            For details on th underlying lack of support from GitHub please see the [most upvote ever feature request on GitHub](https://github.com/actions/toolkit/issues/399).
+            Don't be shy and upvote it!

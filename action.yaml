@@ -1,0 +1,143 @@
+name: 'Deployment manifest'
+description: 'Create or read a deployment manifest comment.'
+inputs:
+  create:
+    description: 'Whether to create a deployment manifest comment.'
+    required: true
+    default: ''
+  read:
+    description: 'Whether to read a deployment manifest comment.'
+    required: true
+    default: ''
+  issue-number:
+    description: 'The number of the deployment issue or pull request.'
+    required: true
+  issue-title:
+    description: 'The title of the deployment issue, used when creating the manifest.'
+    required: false
+  comment-header:
+    description: 'The header of the manifest comment, used to create new comments and find existing comments.'
+    required: true
+    default: '## Deployment manifest'
+  target-runtimes:
+    description: 'The runtimes where to deploy the release.'
+    required: true
+    default: 'tst acc prd'
+  deploy-label:
+    description: 'The label that is used to trigger the manifest generation.'
+    required: true
+    default: 'deploy'
+  release:
+    description: 'When reading the manifest, if this input is set then the action will skip reading the comment and will take this value as the release to deploy. Setting this value is only meaningful when `read = true`.'
+    required: false
+  runtime:
+    description: 'The runtime targeted by a deployment, which will be used to validate if the runtime is part of the target runtimes defined in the deployment manifest. Setting this value is only meaningful when `read = true`.'
+    required: false
+outputs:
+  release:
+    description: 'The release to deploy.'
+    value: ${{ steps.read-release.outputs.release }}
+  runtimes:
+    description: 'The target runtimes for deployment.'
+    value: ${{ steps.read-release.outputs.runtimes }}
+runs:
+  using: "composite"
+  steps:
+    - name: Find Manifest Comment
+      if: inputs.create || (inputs.read && ! inputs.release)
+      uses: peter-evans/find-comment@v2
+      id: find-manifest-comment
+      with:
+        issue-number: ${{ inputs.issue-number }}
+        comment-author: 'github-actions[bot]'
+        body-includes: ${{ inputs.comment-header }}
+        direction: last
+    - name: Read release
+      if: inputs.read
+      id: read-release
+      shell: bash
+      run: |
+        if [[ "${{ inputs.release }}" != "" ]]; then
+          echo "DEBUG :: reading release from inputs"
+          release=${{ inputs.release }}
+        else
+          echo "DEBUG :: reading release from issue manifest"
+          cat > .tmp-comment-body << 'EOT'
+          ${{ steps.find-manifest-comment.outputs.comment-body }}
+        EOT
+          manifest="$( sed '1,/```json/d;/```/,$d' .tmp-comment-body )"
+
+          echo "DEBUG :: ${manifest}"
+          release="$( jq -r '.release' <<<"${manifest}" )"
+          runtimes="$( jq -r '.runtimes | join(" ")' <<<"${manifest}" )"
+        fi
+
+        echo "release=${release}" >> "${GITHUB_OUTPUT}"
+        echo "runtimes=${runtimes}" >> "${GITHUB_OUTPUT}"
+    - name: Validate runtime is in manifest
+      uses: actions/github-script@v6
+      if: inputs.read && (! inputs.release) && ! (inputs.runtime && contains(steps.read-release.outputs.runtimes, inputs.runtime))
+      with:
+        script: |
+          core.setFailed('Manifest runtimes "${{ steps.read-release.outputs.runtimes }}" do not include the target runtime "${{ inputs.runtime }}"')
+    - name: Create deployment manifest
+      if: inputs.create
+      id: deployment-manifest
+      shell: bash
+      run: |
+        release="$( printf "${title}"  | sed -e "s/Deploy //" | xargs )"
+        runtimes_list=""
+        for e in $(echo $runtimes); do runtimes_list="${runtimes_list}- $e\n"; done
+        runtimes_list="$( echo -e "${runtimes_list}" )"
+
+        manifest="$( jq -c -n --arg release "${release}" --arg runtimes "${runtimes}" '{release: $release | rtrimstr("\r"), runtimes: $runtimes | split(" ")}' )"
+
+        echo "manifest=${manifest}" >> "${GITHUB_OUTPUT}"
+        echo "release=${release}" >> "${GITHUB_OUTPUT}"
+        echo "runtimes-list<<END_OF_VALUE" >> "${GITHUB_OUTPUT}"
+        echo -e "${runtimes_list}" >> "${GITHUB_OUTPUT}"
+        echo "END_OF_VALUE" >> "${GITHUB_OUTPUT}"
+      env:
+        runtimes: ${{ inputs.target-runtimes }}
+        title: ${{ inputs.issue-title }}
+    - name: Prepare manifest comment content
+      if: inputs.create
+      id: tag-comment
+      shell: bash
+      run: |
+        if [[ "${{ steps.find-manifest-comment.outputs.comment-id }}" != "" ]]; then
+          echo "DEBUG :: comment updated"
+          echo "updated=(comment updated ♻️)" >> "${GITHUB_OUTPUT}"
+        fi
+        
+        first_runtime="$( cut -d " " -f1 <<<"${runtimes}" )"
+        echo "first-runtime=${first_runtime}" >> "${GITHUB_OUTPUT}"
+        echo "first-runtime-upper=$( tr '[:lower:]' '[:upper:]' <<<"${first_runtime}" )" >> "${GITHUB_OUTPUT}"
+      env:
+        runtimes: ${{ inputs.target-runtimes }}
+    - name: Create manifest comment
+      if: inputs.create
+      uses: peter-evans/create-or-update-comment@v2
+      with:
+        edit-mode: replace
+        issue-number: ${{ inputs.issue-number }}
+        comment-id: ${{ steps.find-manifest-comment.outputs.comment-id }}
+        body: |
+          ${{ inputs.comment-header }}
+
+          Will deploy release **${{ steps.deployment-manifest.outputs.release }}** to runtimes:
+          ${{ steps.deployment-manifest.outputs.runtimes-list }}
+
+          <details>
+            <summary>Show Manifest</summary>
+
+            ```json
+            ${{ steps.deployment-manifest.outputs.manifest }}
+            ```
+          </details>
+
+          To re-generate this manifest, re-label the issue with `${{ inputs.deploy-label }}`.
+
+          Comment `deploy ${{ steps.tag-comment.outputs.first-runtime }}` to start deploying to ${{ steps.tag-comment.outputs.first-runtime-upper }}.
+
+          <sub><sup>*Generated by [workflow ${{ github.run_id }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})* ${{ steps.tag-comment.outputs.updated }}</sup></sub>

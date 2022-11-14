@@ -35,7 +35,7 @@ jobs:
         uses: actions/checkout@v3
       - name: Release
         id: release
-        uses: ./
+        uses: GRESB/action-release@main
         with:
           name: ${{ steps.tag.outputs.tag }}
           is-final: ${{ steps.tag.outputs.is-final }}

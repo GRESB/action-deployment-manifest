@@ -31,8 +31,6 @@ jobs:
           context: Create release (push tag)
           sha: ${{ steps.tag.outputs.sha }}
           targetUrl: "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-      - name: Checkout
-        uses: actions/checkout@v3
       - name: Release
         id: release
         uses: GRESB/action-release@main
